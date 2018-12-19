@@ -146,14 +146,11 @@ extern int __get_user_bad(void);
 
 #define __uaccess_begin() stac()
 #define __uaccess_end()   clac()
-<<<<<<< HEAD
-=======
 #define __uaccess_begin_nospec()	\
 ({					\
 	stac();				\
 	barrier_nospec();		\
 })
->>>>>>> v4.4.168
 
 /*
  * This is a type: either unsigned long, if the argument fits into

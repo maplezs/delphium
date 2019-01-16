@@ -1230,7 +1230,7 @@ static int do_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 	while (get_pages(sbi, F2FS_DIRTY_META)) {
 		f2fs_sync_meta_pages(sbi, META, LONG_MAX, FS_CP_META_IO);
 		if (unlikely(f2fs_cp_error(sbi)))
-			return -EIO;
+			break;
 	}
 
 	/*
@@ -1310,7 +1310,11 @@ static int do_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 			f2fs_sync_meta_pages(sbi, META, LONG_MAX,
 							FS_CP_META_IO);
 			if (unlikely(f2fs_cp_error(sbi)))
+<<<<<<< HEAD
 				return -EIO;
+=======
+				break;
+>>>>>>> a74c5b216587... Update f2fs
 		}
 	}
 
@@ -1361,7 +1365,19 @@ static int do_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 
 	/* barrier and flush checkpoint cp pack 2 page if it can */
 	commit_checkpoint(sbi, ckpt, start_blk);
+<<<<<<< HEAD
 	wait_on_all_pages_writeback(sbi);
+=======
+	f2fs_wait_on_all_pages_writeback(sbi);
+
+	/*
+	 * invalidate intermediate page cache borrowed from meta inode
+	 * which are used for migration of encrypted inode's blocks.
+	 */
+	if (f2fs_sb_has_encrypt(sbi->sb))
+		invalidate_mapping_pages(META_MAPPING(sbi),
+				MAIN_BLKADDR(sbi), MAX_BLKADDR(sbi) - 1);
+>>>>>>> a74c5b216587... Update f2fs
 
 	f2fs_release_ino_entry(sbi, false);
 

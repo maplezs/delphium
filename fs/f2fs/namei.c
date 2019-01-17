@@ -50,8 +50,8 @@ static struct inode *f2fs_new_inode(struct inode *dir, umode_t mode)
 
 	inode->i_ino = ino;
 	inode->i_blocks = 0;
-	inode->i_mtime = inode->i_atime = inode->i_ctime = current_time(inode);
-	F2FS_I(inode)->i_crtime = inode->i_mtime;
+	inode->i_mtime = inode->i_atime = inode->i_ctime =
+			F2FS_I(inode)->i_crtime = current_time(inode);
 	inode->i_generation = sbi->s_next_generation++;
 
 	if (S_ISDIR(inode->i_mode))
@@ -297,8 +297,8 @@ static int f2fs_create(struct inode *dir, struct dentry *dentry, umode_t mode,
 
 	f2fs_alloc_nid_done(sbi, ino);
 
-	unlock_new_inode(inode);
 	d_instantiate(dentry, inode);
+	unlock_new_inode(inode);
 
 	if (IS_DIRSYNC(dir))
 		f2fs_sync_fs(sbi->sb, 1);
@@ -597,8 +597,8 @@ static int f2fs_symlink(struct inode *dir, struct dentry *dentry,
 	err = page_symlink(inode, disk_link.name, disk_link.len);
 
 err_out:
-	unlock_new_inode(inode);
 	d_instantiate(dentry, inode);
+	unlock_new_inode(inode);
 
 	/*
 	 * Let's flush symlink data in order to avoid broken symlink as much as
@@ -661,8 +661,8 @@ static int f2fs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 
 	f2fs_alloc_nid_done(sbi, inode->i_ino);
 
-	unlock_new_inode(inode);
 	d_instantiate(dentry, inode);
+	unlock_new_inode(inode);
 
 	if (IS_DIRSYNC(dir))
 		f2fs_sync_fs(sbi->sb, 1);
@@ -713,8 +713,8 @@ static int f2fs_mknod(struct inode *dir, struct dentry *dentry,
 
 	f2fs_alloc_nid_done(sbi, inode->i_ino);
 
-	unlock_new_inode(inode);
 	d_instantiate(dentry, inode);
+	unlock_new_inode(inode);
 
 	if (IS_DIRSYNC(dir))
 		f2fs_sync_fs(sbi->sb, 1);

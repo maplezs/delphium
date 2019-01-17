@@ -41,7 +41,7 @@ static struct kmem_cache *f2fs_inode_cachep;
 
 #ifdef CONFIG_F2FS_FAULT_INJECTION
 
-char *f2fs_fault_name[FAULT_MAX] = {
+char *fault_name[FAULT_MAX] = {
 	[FAULT_KMALLOC]		= "kmalloc",
 	[FAULT_KVMALLOC]	= "kvmalloc",
 	[FAULT_PAGE_ALLOC]	= "page alloc",
@@ -765,23 +765,6 @@ static int parse_options(struct super_block *sb, char *options)
 					"Test dummy encryption mount option ignored");
 #endif
 			break;
-		case Opt_checkpoint:
-			name = match_strdup(&args[0]);
-			if (!name)
-				return -ENOMEM;
-
-			if (strlen(name) == 6 &&
-					!strncmp(name, "enable", 6)) {
-				clear_opt(sbi, DISABLE_CHECKPOINT);
-			} else if (strlen(name) == 7 &&
-					!strncmp(name, "disable", 7)) {
-				set_opt(sbi, DISABLE_CHECKPOINT);
-			} else {
-				kfree(name);
-				return -EINVAL;
-			}
-			kfree(name);
-			break;
 		default:
 			f2fs_msg(sb, KERN_ERR,
 				"Unrecognized mount option \"%s\" or missing value",
@@ -792,19 +775,6 @@ static int parse_options(struct super_block *sb, char *options)
 #ifdef CONFIG_QUOTA
 	if (f2fs_check_quota_options(sbi))
 		return -EINVAL;
-#else
-	if (f2fs_sb_has_quota_ino(sbi->sb) && !f2fs_readonly(sbi->sb)) {
-		f2fs_msg(sbi->sb, KERN_INFO,
-			 "Filesystem with quota feature cannot be mounted RDWR "
-			 "without CONFIG_QUOTA");
-		return -EINVAL;
-	}
-	if (f2fs_sb_has_project_quota(sbi->sb) && !f2fs_readonly(sbi->sb)) {
-		f2fs_msg(sb, KERN_ERR,
-			"Filesystem with project quota feature cannot be "
-			"mounted RDWR without CONFIG_QUOTA");
-		return -EINVAL;
-	}
 #endif
 
 	if (F2FS_IO_SIZE_BITS(sbi) && !test_opt(sbi, LFS)) {
@@ -1396,8 +1366,7 @@ static void default_options(struct f2fs_sb_info *sbi)
 	set_opt(sbi, NOHEAP);
 	sbi->sb->s_flags |= MS_LAZYTIME;
 	set_opt(sbi, FLUSH_MERGE);
-	set_opt(sbi, DISCARD);
-	if (f2fs_sb_has_blkzoned(sbi->sb))
+	if (f2fs_sb_has_blkzoned(sbi->sb)) {
 		set_opt_mode(sbi, F2FS_MOUNT_LFS);
 		set_opt(sbi, DISCARD);
 	} else {
@@ -1419,57 +1388,6 @@ static void default_options(struct f2fs_sb_info *sbi)
 #ifdef CONFIG_QUOTA
 static int f2fs_enable_quotas(struct super_block *sb);
 #endif
-
-static int f2fs_disable_checkpoint(struct f2fs_sb_info *sbi)
-{
-	struct cp_control cpc;
-	int err;
-
-	sbi->sb->s_flags |= MS_ACTIVE;
-
-	mutex_lock(&sbi->gc_mutex);
-	f2fs_update_time(sbi, DISABLE_TIME);
-
-	while (!f2fs_time_over(sbi, DISABLE_TIME)) {
-		err = f2fs_gc(sbi, true, false, NULL_SEGNO);
-		if (err == -ENODATA)
-			break;
-		if (err && err != -EAGAIN) {
-			mutex_unlock(&sbi->gc_mutex);
-			return err;
-		}
-	}
-	mutex_unlock(&sbi->gc_mutex);
-
-	err = sync_filesystem(sbi->sb);
-	if (err)
-		return err;
-
-	if (f2fs_disable_cp_again(sbi))
-		return -EAGAIN;
-
-	mutex_lock(&sbi->gc_mutex);
-	cpc.reason = CP_PAUSE;
-	set_sbi_flag(sbi, SBI_CP_DISABLED);
-	f2fs_write_checkpoint(sbi, &cpc);
-
-	sbi->unusable_block_count = 0;
-	mutex_unlock(&sbi->gc_mutex);
-	return 0;
-}
-
-static void f2fs_enable_checkpoint(struct f2fs_sb_info *sbi)
-{
-	mutex_lock(&sbi->gc_mutex);
-	f2fs_dirty_to_prefree(sbi);
-
-	clear_sbi_flag(sbi, SBI_CP_DISABLED);
-	set_sbi_flag(sbi, SBI_IS_DIRTY);
-	mutex_unlock(&sbi->gc_mutex);
-
-	f2fs_sync_fs(sbi->sb, 1);
-}
-
 static int f2fs_remount(struct super_block *sb, int *flags, char *data)
 {
 	struct f2fs_sb_info *sbi = F2FS_SB(sb);
@@ -2224,26 +2142,6 @@ static int sanity_check_raw_super(struct f2fs_sb_info *sbi,
 					(bh->b_data + F2FS_SUPER_OFFSET);
 	struct super_block *sb = sbi->sb;
 	unsigned int blocksize;
-	size_t crc_offset = 0;
-	__u32 crc = 0;
-
-	/* Check checksum_offset and crc in superblock */
-	if (le32_to_cpu(raw_super->feature) & F2FS_FEATURE_SB_CHKSUM) {
-		crc_offset = le32_to_cpu(raw_super->checksum_offset);
-		if (crc_offset !=
-			offsetof(struct f2fs_super_block, crc)) {
-			f2fs_msg(sb, KERN_INFO,
-				"Invalid SB checksum offset: %zu",
-				crc_offset);
-			return 1;
-		}
-		crc = le32_to_cpu(raw_super->crc);
-		if (!f2fs_crc_valid(sbi, crc, raw_super, crc_offset)) {
-			f2fs_msg(sb, KERN_INFO,
-				"Invalid SB checksum value: %u", crc);
-			return 1;
-		}
-	}
 
 	if (F2FS_SUPER_MAGIC != le32_to_cpu(raw_super->magic)) {
 		f2fs_msg(sb, KERN_INFO,
@@ -2335,24 +2233,6 @@ static int sanity_check_raw_super(struct f2fs_sb_info *sbi,
 		return 1;
 	}
 
-	/* check log blocks per segment */
-	if (le32_to_cpu(raw_super->log_blocks_per_seg) != 9) {
-		f2fs_msg(sb, KERN_INFO,
-			"Invalid log blocks per segment (%u)\n",
-			le32_to_cpu(raw_super->log_blocks_per_seg));
-		return 1;
-	}
-
-	/* Currently, support 512/1024/2048/4096 bytes sector size */
-	if (le32_to_cpu(raw_super->log_sectorsize) >
-				F2FS_MAX_LOG_SECTOR_SIZE ||
-		le32_to_cpu(raw_super->log_sectorsize) <
-				F2FS_MIN_LOG_SECTOR_SIZE) {
-		f2fs_msg(sb, KERN_INFO, "Invalid log sectorsize (%u)",
-			le32_to_cpu(raw_super->log_sectorsize));
-		return 1;
-	}
-
 	if (secs_per_zone > total_sections) {
 		f2fs_msg(sb, KERN_INFO,
 			"Wrong secs_per_zone (%u > %u)",
@@ -2389,25 +2269,6 @@ static int sanity_check_raw_super(struct f2fs_sb_info *sbi,
 			le32_to_cpu(raw_super->node_ino),
 			le32_to_cpu(raw_super->meta_ino),
 			le32_to_cpu(raw_super->root_ino));
-		return 1;
-	}
-
-	/* check reserved ino info */
-	if (le32_to_cpu(raw_super->node_ino) != 1 ||
-		le32_to_cpu(raw_super->meta_ino) != 2 ||
-		le32_to_cpu(raw_super->root_ino) != 3) {
-		f2fs_msg(sb, KERN_INFO,
-			"Invalid Fs Meta Ino: node(%u) meta(%u) root(%u)",
-			le32_to_cpu(raw_super->node_ino),
-			le32_to_cpu(raw_super->meta_ino),
-			le32_to_cpu(raw_super->root_ino));
-		return 1;
-	}
-
-	if (le32_to_cpu(raw_super->segment_count) > F2FS_MAX_SEGMENT) {
-		f2fs_msg(sb, KERN_INFO,
-			"Invalid segment count (%u)",
-			le32_to_cpu(raw_super->segment_count));
 		return 1;
 	}
 
@@ -2683,13 +2544,6 @@ int f2fs_commit_super(struct f2fs_sb_info *sbi, bool recover)
 				bdev_read_only(sbi->sb->s_bdev)) {
 		set_sbi_flag(sbi, SBI_NEED_SB_WRITE);
 		return -EROFS;
-	}
-
-	/* we should update superblock crc here */
-	if (!recover && f2fs_sb_has_sb_chksum(sbi->sb)) {
-		crc = f2fs_crc32(sbi, F2FS_RAW_SUPER(sbi),
-				offsetof(struct f2fs_super_block, crc));
-		F2FS_RAW_SUPER(sbi)->crc = cpu_to_le32(crc);
 	}
 
 	/* write back-up superblock first */
@@ -3085,7 +2939,7 @@ try_onemore:
 	if (!S_ISDIR(root->i_mode) || !root->i_blocks || !root->i_size) {
 		iput(root);
 		err = -EINVAL;
-		goto free_stats;
+		goto free_node_inode;
 	}
 
 	sb->s_root = d_make_root(root); /* allocate root dentry */
@@ -3099,7 +2953,10 @@ try_onemore:
 		goto free_root_inode;
 
 #ifdef CONFIG_QUOTA
-	/* Enable quota usage during mount */
+	/*
+	 * Turn on quotas which were not enabled for read-only mounts if
+	 * filesystem has quota feature, so that they are updated correctly.
+	 */
 	if (f2fs_sb_has_quota_ino(sb) && !f2fs_readonly(sb)) {
 		err = f2fs_enable_quotas(sb);
 		if (err) {
@@ -3185,7 +3042,6 @@ skip_recovery:
 
 free_meta:
 #ifdef CONFIG_QUOTA
-	f2fs_truncate_quota_inode_pages(sb);
 	if (f2fs_sb_has_quota_ino(sb) && !f2fs_readonly(sb))
 		f2fs_quota_off_umount(sbi->sb);
 #endif

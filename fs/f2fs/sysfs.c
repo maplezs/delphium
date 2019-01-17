@@ -119,9 +119,6 @@ static ssize_t features_show(struct f2fs_attr *a,
 	if (f2fs_sb_has_lost_found(sb))
 		len += snprintf(buf + len, PAGE_SIZE - len, "%s%s",
 				len ? ", " : "", "lost_found");
-	if (f2fs_sb_has_sb_chksum(sb))
-		len += snprintf(buf + len, PAGE_SIZE - len, "%s%s",
-				len ? ", " : "", "sb_checksum");
 	len += snprintf(buf + len, PAGE_SIZE - len, "\n");
 	return len;
 }

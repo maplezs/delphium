@@ -831,7 +831,6 @@ static struct discard_cmd *__create_discard_cmd(struct f2fs_sb_info *sbi,
 	dc->len = len;
 	dc->ref = 0;
 	dc->state = D_PREP;
-	dc->issuing = 0;
 	dc->error = 0;
 	init_completion(&dc->wait);
 	list_add_tail(&dc->list, pend_list);
@@ -861,7 +860,7 @@ static void __detach_discard_cmd(struct discard_cmd_control *dcc,
 							struct discard_cmd *dc)
 {
 	if (dc->state == D_DONE)
-		atomic_sub(dc->issuing, &dcc->issing_discard);
+		atomic_dec(&dcc->issing_discard);
 
 	list_del(&dc->list);
 	rb_erase(&dc->rb_node, &dcc->root);
@@ -1060,72 +1059,7 @@ static void __submit_discard_cmd(struct f2fs_sb_info *sbi,
 		return;
 
 	if (is_sbi_flag_set(sbi, SBI_NEED_FSCK))
-		return 0;
-
-	trace_f2fs_issue_discard(bdev, dc->start, dc->len);
-
-	lstart = dc->lstart;
-	start = dc->start;
-	len = dc->len;
-	total_len = len;
-
-	dc->len = 0;
-
-	while (total_len && *issued < dpolicy->max_requests && !err) {
-		struct bio *bio = NULL;
-		unsigned long flags;
-		bool last = true;
-
-		if (len > max_discard_blocks) {
-			len = max_discard_blocks;
-			last = false;
-		}
-
-		(*issued)++;
-		if (*issued == dpolicy->max_requests)
-			last = true;
-
-		dc->len += len;
-
-		if (time_to_inject(sbi, FAULT_DISCARD)) {
-			f2fs_show_injection_info(FAULT_DISCARD);
-			err = -EIO;
-			goto submit;
-		}
-		err = __blkdev_issue_discard(bdev,
-					SECTOR_FROM_BLOCK(start),
-					SECTOR_FROM_BLOCK(len),
-					GFP_NOFS, 0, &bio);
-submit:
-		if (err) {
-			spin_lock_irqsave(&dc->lock, flags);
-			if (dc->state == D_PARTIAL)
-				dc->state = D_SUBMIT;
-			spin_unlock_irqrestore(&dc->lock, flags);
-
-			break;
-		}
-
-		f2fs_bug_on(sbi, !bio);
-
-		/*
-		 * should keep before submission to avoid D_DONE
-		 * right away
-		 */
-		spin_lock_irqsave(&dc->lock, flags);
-		if (last)
-			dc->state = D_SUBMIT;
-		else
-			dc->state = D_PARTIAL;
-		dc->bio_ref++;
-		spin_unlock_irqrestore(&dc->lock, flags);
-
-		atomic_inc(&dcc->issing_discard);
-		dc->issuing++;
-		list_move_tail(&dc->list, wait_list);
-
-		/* sanity check on discard range */
-		__check_sit_bitmap(sbi, start, start + len);
+		return;
 
 	trace_f2fs_issue_discard(dc->bdev, dc->start, dc->len);
 
@@ -1789,7 +1723,6 @@ void f2fs_clear_prefree_segments(struct f2fs_sb_info *sbi,
 	unsigned int start = 0, end = -1;
 	unsigned int secno, start_segno;
 	bool force = (cpc->reason & CP_DISCARD);
-	bool need_align = test_opt(sbi, LFS) && sbi->segs_per_sec > 1;
 
 	mutex_lock(&dirty_i->seglist_lock);
 
@@ -2584,7 +2517,6 @@ int f2fs_trim_fs(struct f2fs_sb_info *sbi, struct fstrim_range *range)
 	struct discard_policy dpolicy;
 	unsigned long long trimmed = 0;
 	int err = 0;
-	bool need_align = test_opt(sbi, LFS) && sbi->segs_per_sec > 1;
 
 	if (start >= MAX_BLKADDR(sbi) || range->len < sbi->blocksize)
 		return -EINVAL;
@@ -3128,7 +3060,8 @@ void f2fs_wait_on_page_writeback(struct page *page,
 	if (PageWriteback(page)) {
 		struct f2fs_sb_info *sbi = F2FS_P_SB(page);
 
-		f2fs_submit_merged_write_cond(sbi, NULL, page, 0, type);
+		f2fs_submit_merged_write_cond(sbi, page->mapping->host,
+						0, page->index, type);
 		if (ordered)
 			wait_on_page_writeback(page);
 		else

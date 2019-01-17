@@ -726,7 +726,6 @@ static void truncate_node(struct dnode_of_data *dn)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(dn->inode);
 	struct node_info ni;
-	int err;
 
 	f2fs_get_node_info(sbi, dn->nid, &ni);
 
@@ -1445,8 +1444,7 @@ void f2fs_move_node_page(struct page *node_page, int gc_type)
 		f2fs_wait_on_page_writeback(node_page, NODE, true);
 
 		f2fs_bug_on(F2FS_P_SB(node_page), PageWriteback(node_page));
-		if (!clear_page_dirty_for_io(node_page)) {
-			err = -EAGAIN;
+		if (!clear_page_dirty_for_io(node_page))
 			goto out_page;
 
 		if (__write_node_page(node_page, false, NULL,
@@ -1707,9 +1705,9 @@ int f2fs_wait_on_node_pages_writeback(struct f2fs_sb_info *sbi, nid_t ino)
 
 	pagevec_init(&pvec, 0);
 
-		f2fs_wait_on_page_writeback(page, NODE, true);
-		if (TestClearPageError(page))
-			ret = -EIO;
+	while ((nr_pages = pagevec_lookup_tag(&pvec, NODE_MAPPING(sbi), &index,
+				PAGECACHE_TAG_WRITEBACK))) {
+		int i;
 
 		for (i = 0; i < nr_pages; i++) {
 			struct page *page = pvec.pages[i];
@@ -2363,13 +2361,6 @@ retry:
 			F2FS_FITS_IN_INODE(src, le16_to_cpu(src->i_extra_isize),
 								i_projid))
 			dst->i_projid = src->i_projid;
-
-		if (f2fs_sb_has_inode_crtime(sbi->sb) &&
-			F2FS_FITS_IN_INODE(src, le16_to_cpu(src->i_extra_isize),
-							i_crtime_nsec)) {
-			dst->i_crtime = src->i_crtime;
-			dst->i_crtime_nsec = src->i_crtime_nsec;
-		}
 	}
 
 	new_ni = old_ni;

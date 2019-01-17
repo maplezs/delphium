@@ -162,8 +162,6 @@ static struct f2fs_dir_entry *find_in_level(struct inode *dir,
 	int max_slots;
 	f2fs_hash_t namehash = f2fs_dentry_hash(&name, fname);
 
-	f2fs_bug_on(F2FS_I_SB(dir), level > MAX_DIR_HASH_DEPTH);
-
 	nbucket = dir_buckets(level, F2FS_I(dir)->i_dir_level);
 	nblock = bucket_blocks(level);
 

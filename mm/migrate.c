@@ -241,7 +241,7 @@ static int remove_migration_pte(struct page *new, struct vm_area_struct *vma,
 
 	/* Recheck VMA as permissions can change since migration started  */
 	if (is_write_migration_entry(entry))
-		pte = maybe_mkwrite(pte, vma);
+		pte = maybe_mkwrite(pte, vma->vm_flags);
 
 #ifdef CONFIG_HUGETLB_PAGE
 	if (PageHuge(new)) {
@@ -1074,7 +1074,6 @@ static ICE_noinline int unmap_and_move(new_page_t get_new_page,
 	int rc = MIGRATEPAGE_SUCCESS;
 	int *result = NULL;
 	struct page *newpage;
-	bool is_lru = !isolated_balloon_page(page);
 
 	newpage = get_new_page(page, private, &result);
 	if (!newpage)
@@ -1142,21 +1141,21 @@ out:
 				goto put_new;
 			}
 
-	/*
-	 * If migration was not successful and there's a freeing callback, use
-	 * it.  Otherwise, putback_lru_page() will drop the reference grabbed
-	 * during isolation. Use the old state of the isolated source page to
-	 * determine if we migrated a LRU page. newpage was already unlocked
-	 * and possibly modified by its owner - don't rely on the page state.
-	 */
+			lock_page(page);
+			if (PageMovable(page))
+				putback_movable_page(page);
+			else
+				__ClearPageIsolated(page);
+			unlock_page(page);
+			put_page(page);
+		}
+put_new:
 	if (put_new_page)
 		put_new_page(newpage, private);
-	else if (rc == MIGRATEPAGE_SUCCESS && unlikely(!is_lru)) {
-		/* drop our reference, page already in the balloon */
+	else
 		put_page(newpage);
-	} else
-		putback_lru_page(newpage);
-
+	}
+	
 	if (result) {
 		if (rc)
 			*result = rc;
